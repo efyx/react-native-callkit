@@ -15,6 +15,9 @@ const RNCallKitDidReceiveStartCallAction = 'RNCallKitDidReceiveStartCallAction';
 const RNCallKitPerformAnswerCallAction = 'RNCallKitPerformAnswerCallAction';
 const RNCallKitPerformEndCallAction = 'RNCallKitPerformEndCallAction';
 const RNCallKitDidActivateAudioSession = 'RNCallKitDidActivateAudioSession';
+const RNCallKitPlayDTMFCallAction = 'RNCallKitPlayDTMFCallAction';
+const RNCallKitSetMutedCallAction = 'RNCallKitSetMutedCallAction';
+const RNCallKitSetSpeakerCallAction = 'RNCallKitSetSpeakerCallAction';
 
 export default class RNCallKit {
     static addEventListener(type, handler) {
@@ -40,6 +43,21 @@ export default class RNCallKit {
             listener = _RNCallKitEmitter.addListener(
                 RNCallKitDidActivateAudioSession,
                 () => { handler(); }
+            );
+        } else if (type == 'playDTMF') {
+            listener = _RNCallKitEmitter.addListener(
+                RNCallKitPlayDTMFCallAction,
+                (data) => { handler(data); }
+            );
+        } else if (type == 'setMuted') {
+            listener = _RNCallKitEmitter.addListener(
+                RNCallKitSetMutedCallAction,
+                (data) => { handler(data); }
+            );
+        } else if (type == 'setSpeaker') {
+            listener = _RNCallKitEmitter.addListener(
+                RNCallKitSetSpeakerCallAction,
+                (data) => { handler(data); }
             );
         }
         _callkitEventHandlers.set(handler, listener);

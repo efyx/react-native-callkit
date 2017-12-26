@@ -22,6 +22,9 @@ static NSString *const RNCallKitDidReceiveStartCallAction = @"RNCallKitDidReceiv
 static NSString *const RNCallKitPerformAnswerCallAction = @"RNCallKitPerformAnswerCallAction";
 static NSString *const RNCallKitPerformEndCallAction = @"RNCallKitPerformEndCallAction";
 static NSString *const RNCallKitDidActivateAudioSession = @"RNCallKitDidActivateAudioSession";
+static NSString *const RNCallKitPlayDTMFCallAction = @"RNCallKitPlayDTMFCallAction";
+static NSString *const RNCallKitSetMutedCallAction = @"RNCallKitSetMutedCallAction";
+static NSString *const RNCallKitSetSpeakerCallAction = @"RNCallKitSetSpeakerCallAction";
 
 @implementation RNCallKit
 {
@@ -43,6 +46,12 @@ RCT_EXPORT_MODULE()
                                                  selector:@selector(handleStartCallNotification:)
                                                      name:RNCallKitHandleStartCallNotification
                                                    object:nil];
+        
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleAudioHardwareRouteChange:)
+                                                     name:AVAudioSessionRouteChangeNotification
+                                                   object:nil];
+        
         _isStartCallActionEventListenerAdded = NO;
     }
     return self;
@@ -63,15 +72,21 @@ RCT_EXPORT_MODULE()
         RNCallKitDidReceiveStartCallAction,
         RNCallKitPerformAnswerCallAction,
         RNCallKitPerformEndCallAction,
-        RNCallKitDidActivateAudioSession
+        RNCallKitDidActivateAudioSession,
+        RNCallKitPlayDTMFCallAction,
+        RNCallKitSetMutedCallAction,
+        RNCallKitSetSpeakerCallAction
     ];
 }
 
-RCT_EXPORT_METHOD(setup:(NSDictionary *)options)
+- (BOOL) isReady
 {
-#ifdef DEBUG
-    NSLog(@"[RNCallKit][setup] options = %@", options);
-#endif
+    return self.callKitProvider != nil;
+}
+
+- (void) setup
+{
+    NSDictionary *options = @{ @"appName" : @"AtOnline" };
     _version = [[[NSProcessInfo alloc] init] operatingSystemVersion];
     self.callKitCallController = [[CXCallController alloc] init];
     _settings = [[NSMutableDictionary alloc] initWithDictionary:options];
@@ -79,13 +94,22 @@ RCT_EXPORT_METHOD(setup:(NSDictionary *)options)
     [self.callKitProvider setDelegate:self queue:nil];
 }
 
-#pragma mark - CXCallController call actions
+
+RCT_EXPORT_METHOD(setup:(NSDictionary *)options)
+{
+#ifdef DEBUG
+    NSLog(@"[RNCallKit][setup] options = %@", options);
+#endif
+    if (![self isReady]) {
+        [self setup];
+    }
+}
 
 // Display the incoming call to the user
-RCT_EXPORT_METHOD(displayIncomingCall:(NSString *)uuidString
-                               handle:(NSString *)handle
-                               handleType:(NSString *)handleType
-                             hasVideo:(BOOL)hasVideo)
+- (void) _displayIncomingCall:(NSString *)uuidString
+                      handle:(NSString *)handle
+                  handleType:(NSString *)handleType
+                    hasVideo:(BOOL)hasVideo
 {
 #ifdef DEBUG
     NSLog(@"[RNCallKit][displayIncomingCall] uuidString = %@", uuidString);
@@ -93,22 +117,45 @@ RCT_EXPORT_METHOD(displayIncomingCall:(NSString *)uuidString
     int _handleType = [self getHandleType:handleType];
     NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:uuidString];
     CXCallUpdate *callUpdate = [[CXCallUpdate alloc] init];
-    callUpdate.remoteHandle = [[CXHandle alloc] initWithType:_handleType value:handle];
+    //callUpdate.remoteHandle = [[CXHandle alloc] initWithType:_handleType value:handle];
     callUpdate.supportsDTMF = YES;
     // TODO: Holding
     callUpdate.supportsHolding = NO;
     callUpdate.supportsGrouping = NO;
     callUpdate.supportsUngrouping = NO;
-    callUpdate.hasVideo = hasVideo;
-
+    callUpdate.hasVideo = NO;
+    callUpdate.localizedCallerName = handle;
+    
+    if (![self isReady]) {
+        [self setup];
+    }
+    
+#ifdef DEBUG
+    NSLog(@"[RNCallKit] going to call => %p", self.callKitProvider);
+#endif
+    
     [self.callKitProvider reportNewIncomingCallWithUUID:uuid update:callUpdate completion:^(NSError * _Nullable error) {
+        #ifdef DEBUG
+        NSLog(@"[RNCallKit] incoming call callback");
+        #endif
         if (error == nil) {
             // Workaround per https://forums.developer.apple.com/message/169511
             if ([self lessThanIos10_2]) {
                 [self configureAudioSession];
             }
+        } else {
+            NSLog(@"RNCallKit Display incoming call failed : %@",[error localizedDescription]);
         }
     }];
+}
+
+#pragma mark - CXCallController call actions
+RCT_EXPORT_METHOD(displayIncomingCall:(NSString *)uuidString
+                  handle:(NSString *)handle
+                  handleType:(NSString *)handleType
+                  hasVideo:(BOOL)hasVideo)
+{
+    [self _displayIncomingCall:uuidString handle:handle handleType:handleType hasVideo:hasVideo];
 }
 
 RCT_EXPORT_METHOD(startCall:(NSString *)uuidString
@@ -229,7 +276,7 @@ RCT_EXPORT_METHOD(reportConnectedOutgoingCallWithUUID:(NSString *)uuidString)
     NSLog(@"[RNCallKit][getProviderConfiguration]");
 #endif
     CXProviderConfiguration *providerConfiguration = [[CXProviderConfiguration alloc] initWithLocalizedName:_settings[@"appName"]];
-    providerConfiguration.supportsVideo = YES;
+    providerConfiguration.supportsVideo = NO;
     providerConfiguration.maximumCallGroups = 1;
     providerConfiguration.maximumCallsPerCallGroup = 1;
     providerConfiguration.supportedHandleTypes = [NSSet setWithObjects:[NSNumber numberWithInteger:CXHandleTypePhoneNumber], nil];
@@ -338,12 +385,49 @@ continueUserActivity:(NSUserActivity *)userActivity
     });
 }
 
+- (void)handleAudioHardwareRouteChange:(NSNotification *)notification
+{
+#ifdef DEBUG
+    NSLog(@"[RNCallKit][handleAudioHardwareRouteChange] notification = %@", notification);
+#endif
+    BOOL isSpeaker = NO;
+    
+    AVAudioSession* audioSession = [AVAudioSession sharedInstance];
+    for (AVAudioSessionPortDescription *output in audioSession.currentRoute.outputs) {
+        NSLog(@"Testing output type %@ / %@", output.portType, AVAudioSessionPortBuiltInSpeaker);
+        if ([output.portType isEqualToString:AVAudioSessionPortBuiltInSpeaker]) {
+            isSpeaker = YES;
+        }
+    }
+
+    [self sendEventWithName:RNCallKitSetSpeakerCallAction body:@{ @"active": [NSNumber numberWithBool:isSpeaker]}];
+}
+
+
 #pragma mark - CXProviderDelegate
 
 - (void)providerDidReset:(CXProvider *)provider{
 #ifdef DEBUG
     NSLog(@"[RNCallKit][providerDidReset]");
 #endif
+}
+
+- (void)provider:(CXProvider *)provider performPlayDTMFCallAction:(CXPlayDTMFCallAction *)action
+{
+#ifdef DEBUG
+    NSLog(@"[RNCallKit][CXProviderDelegate][provider:performPlayDTMFCallAction]");
+#endif
+    [self sendEventWithName:RNCallKitPlayDTMFCallAction body:@{ @"callUUID": action.callUUID.UUIDString, @"digits": action.digits }];
+    [action fulfill];
+}
+
+- (void)provider:(CXProvider *)provider performSetMutedCallAction:(CXSetMutedCallAction *)action
+{
+#ifdef DEBUG
+    NSLog(@"[RNCallKit][CXProviderDelegate][provider:performSetMutedCallAction]");
+#endif
+    [self sendEventWithName:RNCallKitSetMutedCallAction body:@{ @"callUUID": action.callUUID.UUIDString, @"muted": [NSNumber numberWithBool:action.muted] }];
+    [action fulfill];
 }
 
 // Starting outgoing call
