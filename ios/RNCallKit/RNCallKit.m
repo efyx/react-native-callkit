@@ -177,16 +177,20 @@ RCT_EXPORT_METHOD(startCall:(NSString *)uuidString
     [self requestTransaction:transaction];
 }
 
-RCT_EXPORT_METHOD(endCall:(NSString *)uuidString)
-{
+- (void) _endCall:(NSString *)uuidString {
 #ifdef DEBUG
     NSLog(@"[RNCallKit][endCall] uuidString = %@", uuidString);
 #endif
     NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:uuidString];
     CXEndCallAction *endCallAction = [[CXEndCallAction alloc] initWithCallUUID:uuid];
     CXTransaction *transaction = [[CXTransaction alloc] initWithAction:endCallAction];
-
+    
     [self requestTransaction:transaction];
+}
+
+RCT_EXPORT_METHOD(endCall:(NSString *)uuidString)
+{
+    [self _endCall:uuidString];
 }
 
 RCT_EXPORT_METHOD(setHeldCall:(NSString *)uuidString onHold:(BOOL)onHold)
@@ -369,9 +373,7 @@ continueUserActivity:(NSUserActivity *)userActivity
 
 - (void)handleStartCallNotification:(NSNotification *)notification
 {
-#ifdef DEBUG
-    NSLog(@"[RNCallKit][handleStartCallNotification] userInfo = %@", notification.userInfo);
-#endif
+
     int delayInSeconds;
     if (!_isStartCallActionEventListenerAdded) {
         // Workaround for when app is just launched and JS side hasn't registered to the event properly
@@ -379,6 +381,9 @@ continueUserActivity:(NSUserActivity *)userActivity
     } else {
         delayInSeconds = 0;
     }
+#ifdef DEBUG
+    NSLog(@"[RNCallKit][handleStartCallNotification] userInfo = %@ delay=%d", notification.userInfo, delayInSeconds);
+#endif
     dispatch_time_t popTime = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayInSeconds * NSEC_PER_SEC));
     dispatch_after(popTime, dispatch_get_main_queue(), ^{
         [self sendEventWithName:RNCallKitDidReceiveStartCallAction body:notification.userInfo];
