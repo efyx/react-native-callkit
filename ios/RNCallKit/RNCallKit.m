@@ -31,6 +31,7 @@ static NSString *const RNCallKitSetSpeakerCallAction = @"RNCallKitSetSpeakerCall
     NSMutableDictionary *_settings;
     NSOperatingSystemVersion _version;
     BOOL _isStartCallActionEventListenerAdded;
+    BOOL isJSSetupDone;
 }
 
 // should initialise in AppDelegate.m
@@ -41,6 +42,7 @@ RCT_EXPORT_MODULE()
 #ifdef DEBUG
     NSLog(@"[RNCallKit][init]");
 #endif
+    isJSSetupDone = FALSE;
     if (self = [super init]) {
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(handleStartCallNotification:)
@@ -84,6 +86,11 @@ RCT_EXPORT_MODULE()
     return self.callKitProvider != nil;
 }
 
+- (BOOL) isJSReady
+{
+    return isJSSetupDone;
+}
+
 - (void) setup
 {
     NSDictionary *options = @{ @"appName" : @"AtOnline" };
@@ -92,6 +99,23 @@ RCT_EXPORT_MODULE()
     _settings = [[NSMutableDictionary alloc] initWithDictionary:options];
     self.callKitProvider = [[CXProvider alloc] initWithConfiguration:[self getProviderConfiguration]];
     [self.callKitProvider setDelegate:self queue:nil];
+}
+
+- (void) sendEventWhenReady:(NSString *)name body:(id)body
+{
+#ifdef DEBUG
+    NSLog(@"[RNCallKit][sendEventWhenReady] name=%@ delaying=%@", name, isJSSetupDone ? @"no" : @"yes");
+#endif
+    if (!isJSSetupDone) {
+        // Workaround for when app is just launched and JS side hasn't registered to the event properly
+        dispatch_time_t popTime = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5f * NSEC_PER_SEC));
+        dispatch_after(popTime, dispatch_get_main_queue(), ^{
+            NSLog(@"[RNCallKit][sendEventWhenReady] in callback");
+            [self sendEventWhenReady:name body:body];
+        });
+    } else {
+        [self sendEventWithName:name body:body];
+    }
 }
 
 
@@ -103,6 +127,7 @@ RCT_EXPORT_METHOD(setup:(NSDictionary *)options)
     if (![self isReady]) {
         [self setup];
     }
+    isJSSetupDone = TRUE;
 }
 
 // Display the incoming call to the user
@@ -373,7 +398,6 @@ continueUserActivity:(NSUserActivity *)userActivity
 
 - (void)handleStartCallNotification:(NSNotification *)notification
 {
-
     int delayInSeconds;
     if (!_isStartCallActionEventListenerAdded) {
         // Workaround for when app is just launched and JS side hasn't registered to the event properly
@@ -405,7 +429,7 @@ continueUserActivity:(NSUserActivity *)userActivity
         }
     }
 
-    [self sendEventWithName:RNCallKitSetSpeakerCallAction body:@{ @"active": [NSNumber numberWithBool:isSpeaker]}];
+    [self sendEventWhenReady:RNCallKitSetSpeakerCallAction body:@{ @"active": [NSNumber numberWithBool:isSpeaker]}];
 }
 
 
@@ -422,7 +446,7 @@ continueUserActivity:(NSUserActivity *)userActivity
 #ifdef DEBUG
     NSLog(@"[RNCallKit][CXProviderDelegate][provider:performPlayDTMFCallAction]");
 #endif
-    [self sendEventWithName:RNCallKitPlayDTMFCallAction body:@{ @"callUUID": action.callUUID.UUIDString, @"digits": action.digits }];
+    [self sendEventWhenReady:RNCallKitPlayDTMFCallAction body:@{ @"callUUID": action.callUUID.UUIDString, @"digits": action.digits }];
     [action fulfill];
 }
 
@@ -431,7 +455,7 @@ continueUserActivity:(NSUserActivity *)userActivity
 #ifdef DEBUG
     NSLog(@"[RNCallKit][CXProviderDelegate][provider:performSetMutedCallAction]");
 #endif
-    [self sendEventWithName:RNCallKitSetMutedCallAction body:@{ @"callUUID": action.callUUID.UUIDString, @"muted": [NSNumber numberWithBool:action.muted] }];
+    [self sendEventWhenReady:RNCallKitSetMutedCallAction body:@{ @"callUUID": action.callUUID.UUIDString, @"muted": [NSNumber numberWithBool:action.muted] }];
     [action fulfill];
 }
 
@@ -455,7 +479,7 @@ continueUserActivity:(NSUserActivity *)userActivity
     if (![self lessThanIos10_2]) {
         [self configureAudioSession];
     }
-    [self sendEventWithName:RNCallKitPerformAnswerCallAction body:@{ @"callUUID": action.callUUID.UUIDString }];
+    [self sendEventWhenReady:RNCallKitPerformAnswerCallAction body:@{ @"callUUID": action.callUUID.UUIDString }];
     [action fulfill];
 }
 
@@ -465,7 +489,7 @@ continueUserActivity:(NSUserActivity *)userActivity
 #ifdef DEBUG
     NSLog(@"[RNCallKit][CXProviderDelegate][provider:performEndCallAction]");
 #endif
-    [self sendEventWithName:RNCallKitPerformEndCallAction body:@{ @"callUUID": action.callUUID.UUIDString }];
+    [self sendEventWhenReady:RNCallKitPerformEndCallAction body:@{ @"callUUID": action.callUUID.UUIDString }];
     [action fulfill];
 }
 
@@ -488,7 +512,7 @@ continueUserActivity:(NSUserActivity *)userActivity
 #ifdef DEBUG
     NSLog(@"[RNCallKit][CXProviderDelegate][provider:didActivateAudioSession]");
 #endif
-    [self sendEventWithName:RNCallKitDidActivateAudioSession body:nil];
+    [self sendEventWhenReady:RNCallKitDidActivateAudioSession body:nil];
 }
 
 - (void)provider:(CXProvider *)provider didDeactivateAudioSession:(AVAudioSession *)audioSession
